@@ -193,7 +193,7 @@ public final class LauncherHelper {
                                     if (provider == null)
                                         return null;
                                     else
-                                        return provider.createCompletionTask(dependencyManager, selectedVersion);
+                                        return checkModpackCompletion(repository, configuration, provider, dependencyManager);
                                 } catch (IOException ignore) {
                                 }
                                 return null;
@@ -446,6 +446,40 @@ public final class LauncherHelper {
             LOG.log(Level.WARNING, "Failed to scan mods before launch", e);
             return null;
         }
+    }
+
+    /**
+     * 整合包补全确认：补全任务会把清单内缺失的文件（含被用户主动删除/更新的模组）静默装回，
+     * 故启动前先本地探测将被恢复的文件，非空则弹窗让用户选择
+     * 继续补全 / 跳过本次 / 不再自动补全（持久化到版本设置）。弹窗阻塞模式沿用 checkPathValid。
+     */
+    private Task<?> checkModpackCompletion(FCLGameRepository repository, ModpackConfiguration<?> configuration, ModpackProvider provider, DefaultDependencyManager dependencyManager) {
+        if (setting.isNotRestoreModpack())
+            return null; // 用户已关闭整合包自动补全，静默跳过
+        List<String> missing = ModpackHelper.getMissingModpackFiles(repository, selectedVersion, configuration);
+        if (missing.isEmpty())
+            return Task.composeAsync(() -> provider.createCompletionTask(dependencyManager, selectedVersion));
+        LOG.log(Level.INFO, "Modpack completion check: " + missing.size() + " file(s) will be restored, asking user");
+        CompletableFuture<Task<?>> future = new CompletableFuture<>();
+        Schedulers.androidUIThread().execute(() -> {
+            // 文件列表超 20 个折叠，避免弹窗过长
+            String names = missing.size() > 20
+                    ? String.join("\n", missing.subList(0, 20)) + "\n..."
+                    : String.join("\n", missing);
+            new FCLAlertDialog.Builder(context)
+                    .setAlertLevel(FCLAlertDialog.AlertLevel.ALERT)
+                    .setCancelable(false)
+                    .setMessage(context.getString(R.string.modpack_completion_confirm, names))
+                    .setPositiveButton(context.getString(R.string.modpack_completion_skip), () -> future.complete(null))
+                    .setNeutralButton(context.getString(R.string.modpack_completion_disable), () -> {
+                        setting.setNotRestoreModpack(true);
+                        future.complete(null);
+                    })
+                    .setNegativeButton(context.getString(R.string.modpack_completion_continue), () ->
+                            future.complete(Task.composeAsync(() -> provider.createCompletionTask(dependencyManager, selectedVersion))))
+                    .create().show();
+        });
+        return Task.fromCompletableFuture(future).thenComposeAsync(task -> task);
     }
 
     private Task<FCLBridge> checkRenderer(FCLBridge bridge, Renderer renderer, String version, List<LocalModFile> mods) {
