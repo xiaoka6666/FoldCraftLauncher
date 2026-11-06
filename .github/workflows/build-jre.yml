@@ -1,0 +1,72 @@
+name: Build JRE 21 for arm64-v8a
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-jre.yml"
+
+jobs:
+  build-jre-aarch64:
+    runs-on: ubuntu-latest
+    name: Build OpenJDK 21 (armv8-a target)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone FCL-Team JRE build scripts
+        run: |
+          git clone --depth 1 -b Build_JRE_21 https://github.com/FCL-Team/Android-OpenJDK-Build.git jdk-build
+
+      - name: Patch build_jdk.sh - add -march=armv8-a
+        run: |
+          cd jdk-build
+          # For aarch64: add -march=armv8-a to ensure baseline ARMv8.0 instructions only
+          sed -i 's/export CFLAGS+=" -O3"/export CFLAGS+=" -O3 -march=armv8-a"/' build_jdk.sh
+          # Verify the patch was applied
+          grep -n "march" build_jdk.sh
+          echo "=== build_jdk.sh CFLAGS ==="
+          grep "CFLAGS" build_jdk.sh
+
+      - name: Run JRE build (aarch64)
+        run: |
+          cd jdk-build
+          chmod +x android-wrapped-clang android-wrapped-clang++ *.sh
+          export TARGET=aarch64-linux-android
+          export TARGET_JDK=aarch64
+          export NDK_PREBUILT_ARCH=aarch64
+          export JDK_DEBUG_LEVEL=release
+          export JOBS=4
+
+          # Install build deps
+          sudo apt update
+          sudo apt -y install autoconf python3 python-is-python3 unzip zip systemtap-sdt-dev \
+            libxtst-dev libasound2-dev libelf-dev libfontconfig1-dev libx11-dev \
+            libxext-dev libxrandr-dev libxrender-dev libxtst-dev libxt-dev g++ pkg-config
+
+          # Download NDK r21
+          wget -nc -nv -O android-ndk-r21-linux-x86_64.zip \
+            "https://dl.google.com/android/repository/android-ndk-r21-linux-x86_64.zip"
+
+          # Build
+          ./extract_ndk.sh
+          ./get_boot_jdk.sh
+          ./get_libs.sh
+          ./build_libs.sh
+          ./clone_jdk.sh
+          ./build_jdk.sh
+          ./remove_jdk_debug_info.sh
+          ./tar_jdk.sh
+
+      - name: List build output
+        run: |
+          cd jdk-build
+          ls -la jre21*.tar.xz 2>/dev/null || echo "No JRE tarball found"
+          find . -name "jre21*" -o -name "*.tar.xz" | head -10
+
+      - name: Upload JRE artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jre21-arm64-v8a
+          path: jdk-build/jre21*.tar.xz
+          if-no-files-found: error
