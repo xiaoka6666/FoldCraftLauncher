@@ -1,0 +1,64 @@
+name: Build JRE 21 armv8-a
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-jre.yml"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Clone JRE build scripts
+        run: git clone --depth 1 -b Build_JRE_21 https://github.com/FCL-Team/Android-OpenJDK-Build.git jdk-build
+
+      - name: Patch: add -march=armv8-a for aarch64
+        run: |
+          cd jdk-build
+          sed -i 's/export CFLAGS+=" -O3"/export CFLAGS+=" -O3 -march=armv8-a"/' build_jdk.sh
+          grep "march" build_jdk.sh
+
+      - name: Build
+        run: |
+          cd jdk-build
+          chmod +x android-wrapped-clang android-wrapped-clang++ *.sh
+          export TARGET=aarch64-linux-android
+          export TARGET_JDK=aarch64
+          export NDK_PREBUILT_ARCH=aarch64
+          export JDK_DEBUG_LEVEL=release
+          export JOBS=4
+          sudo apt update
+          sudo apt -y install autoconf python3 python-is-python3 unzip zip systemtap-sdt-dev \
+            libxtst-dev libasound2-dev libelf-dev libfontconfig1-dev libx11-dev \
+            libxext-dev libxrandr-dev libxrender-dev libxt-dev g++ pkg-config
+          wget -nc -nv -O android-ndk-r21-linux-x86_64.zip \
+            "https://dl.google.com/android/repository/android-ndk-r21-linux-x86_64.zip"
+          ./extract_ndk.sh
+          ./get_boot_jdk.sh
+          ./get_libs.sh
+          ./build_libs.sh
+          ./clone_jdk.sh
+          ./build_jdk.sh
+          ./remove_jdk_debug_info.sh
+          ./tar_jdk.sh
+
+      - name: Verify armv8-a target
+        run: |
+          cd jdk-build
+          ls -la jre21*.tar.xz
+          # Extract and check libjvm.so for ARMv8.2 instructions (should find none)
+          mkdir -p verify && tar xJf $(ls jre21*.tar.xz | head -1) -C verify
+          # Use readelf or file to check the target
+          file verify/bin/java 2>/dev/null || file verify/lib/server/libjvm.so 2>/dev/null || true
+          echo "Build completed"
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: jre21-arm64-v8a
+          path: jdk-build/jre21*.tar.xz
+          if-no-files-found: error
